@@ -1,0 +1,88 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+    # Define a new Vagrant environment for the Ubuntu cluster with LAMP.
+    config.vm.define "master" do |master|
+      # Add a private network for communication between master and slave
+      master.vm.network "private_network", type: "dhcp"
+      master.vm.provider :docker do |d|
+        # Specify the Docker image for the master node
+        d.image = "philemonnwanne/ubuntu-mod:20.04"
+        d.name = "master"
+        d.has_ssh = true
+        d.privileged = true
+        d.volumes = ["/sys/fs/cgroup:/sys/fs/cgroup:rw"]
+        d.create_args = ["--cgroupns=host"]
+      end
+      # You can install necessary software for control purposes here
+      # For example, to install an SSH server:
+      master.vm.provision "shell", inline: <<-SHELL
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
+        service ssh start
+      SHELL
+  
+      # User Management - Create a user named altschool and grant root privileges
+      master.vm.provision "shell", inline: <<-SHELL
+        useradd -m -s /bin/bash altschool
+        echo "altschool:password" | chpasswd
+        usermod -aG sudo altschool
+      SHELL
+  
+      # Configure SSH key-based authentication
+      master.vm.provision "shell", inline: <<-SHELL
+        sudo -u altschool ssh-keygen -t rsa -b 4096 -C "altschool@example.com" -N "" -f /home/altschool/.ssh/id_rsa
+        sudo -u altschool ssh-copy-id altschool@slave
+        # Allow SSH key-based authentication for altschool
+        echo 'PubkeyAuthentication yes' | sudo -u altschool tee -a /home/altschool/.ssh/config
+        echo 'PasswordAuthentication no' | sudo -u altschool tee -a /home/altschool/.ssh/config
+        sudo -u altschool chmod 600 /home/altschool/.ssh/config
+      SHELL
+  
+      # Data Management and Transfer - Copy data to the Slave node
+      master.vm.provision "shell", inline: <<-SHELL
+        # Ensure the target directory exists on the Slave node
+        ssh altschool@slave 'mkdir -p /mnt/altschool/slave'
+        # Use rsync to copy the contents to the Slave node
+        rsync -avz -e 'ssh' /mnt/altschool/ altschool@slave:/mnt/altschool/slave
+      SHELL
+  
+      # Process Monitoring - Display an overview of currently running processes
+      master.vm.provision "shell", inline: "ps aux"
+  
+      # LAMP Stack Deployment
+      master.vm.provision "shell", inline: <<-SHELL
+        # Install the LAMP stack
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y apache2 mysql-server php
+        # Enable Apache to start on boot
+        update-rc.d apache2 enable
+        # Start Apache and MySQL
+        service apache2 start
+        service mysql start
+        # Secure MySQL installation and initialize it
+        mysql_secure_installation
+        # Validate PHP functionality with Apache
+        echo '<?php phpinfo(); ?>' > /var/www/html/info.php
+      SHELL
+    end
+  
+    config.vm.define "slave" do |slave|
+      slave.vm.provider :docker do |d|
+        # Configure Docker provider for the slave machine
+        d.image = "philemonnwanne/ubuntu-mod:20.04"
+        d.has_ssh = true
+        d.privileged = true
+        d.volumes = ["/sys/fs/cgroup:/sys/fs/cgroup:rw"]
+        d.create_args = ["--cgroupns=host"]
+      end
+  
+      # Add a private network for communication between master and slave
+      slave.vm.network "private_network", type: "dhcp"
+  
+      # Process Monitoring - Display an overview of currently running processes
+      slave.vm.provision "shell", inline: "ps aux"
+    end
+  end
+  
